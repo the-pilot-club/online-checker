@@ -23,5 +23,5 @@ jobs:
           # Strip "v" prefix from tag name
           [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
           echo VERSION=$VERSION
-          docker build --file Dockerfile --tag registry.digitalocean.com/tpc-master/discordbot:$(echo $VERSION) .
-          docker push registry.digitalocean.com/tpc-master/discordbot:$(echo $VERSION)
+          docker build --file Dockerfile --tag registry.digitalocean.com/tpc-master/online-checker:$(echo $VERSION) .
+          docker push registry.digitalocean.com/tpc-master/online-checker:$(echo $VERSION)
