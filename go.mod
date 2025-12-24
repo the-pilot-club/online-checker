@@ -1,11 +1,10 @@
-module github.com/the-pilot-club/go-scripts
+module github.com/the-pilot-club/online-checker
 
 go 1.24.1
 
 require (
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/the-pilot-club/tpcgo v0.0.10
-	gorm.io/gorm v1.31.1
 )
 
 require (

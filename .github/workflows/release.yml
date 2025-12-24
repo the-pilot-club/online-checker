@@ -1,0 +1,27 @@
+name: Release
+on:
+  release:
+    types: [ published ]
+    branches:
+      - main
+env:
+  IMAGE_NAME: online-checker
+
+jobs:
+  # Push image to GitHub Packages.
+  # See also https://docs.docker.com/docker-hub/builds/
+  push_image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Log into registry
+        run: echo "${{ secrets.DO_REGISTRY_USERNAME }}" | docker login registry.digitalocean.com -u ${{ secrets.DO_REGISTRY_USERNAME }} --password-stdin
+      - name: Build and Push image
+        run: |
+          # Strip git ref prefix from version
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          # Strip "v" prefix from tag name
+          [[ "${{ github.ref }}" == "refs/tags/"* ]] && VERSION=$(echo $VERSION | sed -e 's/^v//')
+          echo VERSION=$VERSION
+          docker build --file Dockerfile --tag registry.digitalocean.com/tpc-master/discordbot:$(echo $VERSION) .
+          docker push registry.digitalocean.com/tpc-master/discordbot:$(echo $VERSION)
