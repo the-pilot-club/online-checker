@@ -1,4 +1,4 @@
-package main
+package functions
 
 import (
 	"context"
@@ -58,15 +58,9 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 
 	for _, uu := range u {
 		var usr RedisStore
-		// CHeck Redis for cid
 		err := rdb.HGetAll(ctx, "online:"+strconv.Itoa(uu.VATSIMCid)).Scan(usr)
-		if err != nil {
-			continue
-		} else {
-			if _, found := dfmap[usr.CID]; found {
-				continue
-			} else {
-				fmt.Println("deleting new member: " + strconv.Itoa(uu.VATSIMCid))
+		if _, found := dfmap[usr.CID]; !found {
+			if usr.Callsign != "" {
 				_, dgerr := d.WebhookExecute(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), false, &discordgo.WebhookParams{
 					Embeds: []*discordgo.MessageEmbed{
 						{
@@ -98,6 +92,7 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 				}
 				rdb.Del(ctx, "online:"+strconv.Itoa(uu.VATSIMCid))
 			}
+
 		}
 
 		if value, found := dfmap[strconv.Itoa(uu.VATSIMCid)]; found {
@@ -107,7 +102,8 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 			} else {
 				var v = value.(tpcgo.Pilot)
 				if v.FlightPlan != nil {
-					if strings.Contains(v.FlightPlan.Remarks, "CALLSIGN PILOT CLUB") {
+					if strings.Contains(v.FlightPlan.Remarks, "CALLSIGN=PILOTCLUB") {
+						fmt.Println(v.Callsign)
 						_, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), []string{
 							"cid", strconv.Itoa(v.CID),
 							"callsign", v.Callsign,
@@ -123,11 +119,11 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 									Fields: []*discordgo.MessageEmbedField{
 										{
 											Name:  "Callsign",
-											Value: usr.Callsign,
+											Value: v.Callsign,
 										},
 										{
 											Name:  "Start Time",
-											Value: usr.Start,
+											Value: v.LogonTime,
 										},
 									},
 									Color: 3651327,

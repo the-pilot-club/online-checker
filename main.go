@@ -5,6 +5,7 @@ import (
 	"time"
 
 	_ "github.com/joho/godotenv/autoload"
+	"github.com/the-pilot-club/online-checker/functions"
 	"github.com/the-pilot-club/tpcgo"
 )
 
@@ -16,7 +17,7 @@ func main() {
 
 	for {
 		log.Println("Starting Online Checker Process")
-		OnlineCheck(s, err)
+		functions.OnlineCheck(s, err)
 		log.Println("Online Checker Process Complete. Awaiting Datafeed Update.")
 		time.Sleep(15 * time.Second)
 	}
