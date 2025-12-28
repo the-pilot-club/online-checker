@@ -41,7 +41,7 @@ jobs:
           password: ${{ secrets.DO_REGISTRY_USERNAME }}
 
       - name: Build image
-        run: docker build . --file Dockerfile --tag image --platform $PLATFORMS
+        run: docker build . --file Dockerfile --tag image --platform=linux/amd64,linux/arm64
       - name: Push image
         run: |
           IMAGE_ID=registry.digitalocean.com/tpc-master/online-checker
