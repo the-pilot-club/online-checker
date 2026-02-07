@@ -57,10 +57,55 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 	}
 
 	for _, uu := range u {
-		var usr RedisStore
-		err := rdb.HGetAll(ctx, "online:"+strconv.Itoa(uu.VATSIMCid)).Scan(usr)
-		if _, found := dfmap[usr.CID]; !found {
-			if usr.Callsign != "" {
+
+		if value, found := dfmap[strconv.Itoa(uu.VATSIMCid)]; found {
+			opp, _ := rdb.HGet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), "cid").Result()
+			if len(opp) > 0 {
+				continue
+			} else {
+				t := time.Now()
+				var v = value.(tpcgo.Pilot)
+				if strings.Contains(v.Callsign, "TPC") {
+					_, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), []string{
+						"cid", strconv.Itoa(v.CID),
+						"callsign", v.Callsign,
+						"start", fmt.Sprintf("<t:%d:f>", t.Unix()),
+					}).Result()
+					if reerr != nil {
+						fmt.Println(err)
+					}
+					_, dgerr := d.WebhookExecute(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), false, &discordgo.WebhookParams{
+						Embeds: []*discordgo.MessageEmbed{
+							{
+								Title: "A flight has started!",
+								Fields: []*discordgo.MessageEmbedField{
+									{
+										Name:  "Callsign",
+										Value: v.Callsign,
+									},
+									{
+										Name:  "Start Time",
+										Value: fmt.Sprintf("<t:%d:f>", t.Unix()),
+									},
+								},
+								Color: 3651327,
+								Footer: &discordgo.MessageEmbedFooter{
+									Text:    "Made by the TPC Tech Team",
+									IconURL: "https://static1.squarespace.com/static/614689d3918044012d2ac1b4/t/616ff36761fabc72642806e3/1634726781251/TPC_FullColor_TransparentBg_1280x1024_72dpi.png",
+								}}},
+						AvatarURL: "https://cdn.thepilotclub.org/fcp/tpc%20logo.png",
+						Username:  "TPC Flight Tracking",
+					})
+					if dgerr != nil {
+						log.Fatal(dgerr)
+					}
+				}
+			}
+		} else {
+			var usr RedisStore
+			_ = rdb.HGetAll(ctx, "online:"+strconv.Itoa(uu.VATSIMCid)).Scan(&usr)
+			if usr.CID != "" {
+				fmt.Println("New Online Checker: ", usr.Callsign)
 				_, dgerr := d.WebhookExecute(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), false, &discordgo.WebhookParams{
 					Embeds: []*discordgo.MessageEmbed{
 						{
@@ -76,7 +121,7 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 								},
 								{
 									Name:  "End Time",
-									Value: time.Now().String(),
+									Value: fmt.Sprintf("<t:%d:f>", time.Now().Unix()),
 								},
 							},
 							Color: 3651327,
@@ -91,54 +136,6 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 					log.Fatal(dgerr)
 				}
 				rdb.Del(ctx, "online:"+strconv.Itoa(uu.VATSIMCid))
-			}
-
-		}
-
-		if value, found := dfmap[strconv.Itoa(uu.VATSIMCid)]; found {
-			opp, _ := rdb.HGet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), "cid").Result()
-			if len(opp) > 0 {
-				continue
-			} else {
-				var v = value.(tpcgo.Pilot)
-				if v.FlightPlan != nil {
-					if strings.Contains(v.FlightPlan.Remarks, "CALLSIGN=PILOTCLUB") {
-						fmt.Println(v.Callsign)
-						_, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), []string{
-							"cid", strconv.Itoa(v.CID),
-							"callsign", v.Callsign,
-							"start", v.LogonTime,
-						}).Result()
-						if reerr != nil {
-							fmt.Println(err)
-						}
-						_, dgerr := d.WebhookExecute(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), false, &discordgo.WebhookParams{
-							Embeds: []*discordgo.MessageEmbed{
-								{
-									Title: "A flight has started!",
-									Fields: []*discordgo.MessageEmbedField{
-										{
-											Name:  "Callsign",
-											Value: v.Callsign,
-										},
-										{
-											Name:  "Start Time",
-											Value: v.LogonTime,
-										},
-									},
-									Color: 3651327,
-									Footer: &discordgo.MessageEmbedFooter{
-										Text:    "Made by the TPC Tech Team",
-										IconURL: "https://static1.squarespace.com/static/614689d3918044012d2ac1b4/t/616ff36761fabc72642806e3/1634726781251/TPC_FullColor_TransparentBg_1280x1024_72dpi.png",
-									}}},
-							AvatarURL: "https://cdn.thepilotclub.org/fcp/tpc%20logo.png",
-							Username:  "TPC Flight Tracking",
-						})
-						if dgerr != nil {
-							log.Fatal(dgerr)
-						}
-					}
-				}
 			}
 		}
 
