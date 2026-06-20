@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -31,184 +30,97 @@ type PilotSession struct {
 	RevisionId    string `redis:"revision_id"`
 }
 
-func OnlineCheck(s *tpcgo.Session, st store.SessionStore[PilotSession]) {
+// applyFlightPlan copies the filed flight plan into the session.
+func (s *PilotSession) applyFlightPlan(fp *tpcgo.FlightPlan) {
+	s.AircraftShort = fp.AircraftShort
+	s.Departure = fp.Departure
+	s.Arrival = fp.Arrival
+	s.Route = fp.Route
+	s.Remarks = fp.Remarks
+	s.RevisionId = strconv.Itoa(fp.RevisionID)
+}
 
-	ctx := context.Background()
+// flightPlanField renders a filed flight plan as an embed field.
+func flightPlanField(name string, fp *tpcgo.FlightPlan) *discordgo.MessageEmbedField {
+	return field(name, fmt.Sprintf("> A/C: %v\n> DEP: %v\n> ARR: %v\n> Route: %v\n> Remarks: %v",
+		fp.AircraftShort, fp.Departure, fp.Arrival, fp.Route, fp.Remarks))
+}
 
-	d, err := discordgo.New("")
+// pilotHandler implements Handler for VATSIM pilots flying TPC callsigns.
+type pilotHandler struct{}
+
+func (pilotHandler) Username() string { return "TPC Flight Tracking" }
+
+// ShouldAnnounce limits announcements to TPC callsigns.
+func (pilotHandler) ShouldAnnounce(p tpcgo.Pilot) bool {
+	return strings.Contains(p.Callsign, "TPC")
+}
+
+func (pilotHandler) Online(feed *tpcgo.DataFeed) map[string]tpcgo.Pilot {
+	online := make(map[string]tpcgo.Pilot, len(feed.Pilots))
+	for _, p := range feed.Pilots {
+		online[strconv.Itoa(p.CID)] = p
+	}
+	return online
+}
+
+func (pilotHandler) StartEmbed(p tpcgo.Pilot, now time.Time) (*discordgo.MessageEmbed, PilotSession) {
+	embed := newEmbed("A flight has started!",
+		field("Callsign", p.Callsign),
+		field("Start Time", discordTime(now)),
+	)
+	session := PilotSession{
+		CID:      strconv.Itoa(p.CID),
+		Callsign: p.Callsign,
+		Start:    discordTime(now),
+	}
+	if p.FlightPlan != nil {
+		embed.Fields = append(embed.Fields, flightPlanField("Filed Flight Plan", p.FlightPlan))
+		session.applyFlightPlan(p.FlightPlan)
+	}
+	return embed, session
+}
+
+func (pilotHandler) EndEmbed(s PilotSession, now time.Time) *discordgo.MessageEmbed {
+	return newEmbed("A flight has been logged!",
+		field("Callsign", s.Callsign),
+		field("Start Time", s.Start),
+		field("End Time", discordTime(now)),
+	)
+}
+
+// UpdateEmbed posts an updated flight plan when its revision has advanced.
+func (pilotHandler) UpdateEmbed(p tpcgo.Pilot, existing PilotSession) (*discordgo.MessageEmbed, PilotSession, bool) {
+	if p.FlightPlan == nil {
+		return nil, PilotSession{}, false
+	}
+	storedRev, _ := strconv.Atoi(existing.RevisionId)
+	if p.FlightPlan.RevisionID <= storedRev {
+		return nil, PilotSession{}, false
+	}
+
+	embed := newEmbed("A flight has started! - Updated Flight Plan",
+		field("Callsign", existing.Callsign),
+		field("Start Time", existing.Start),
+		flightPlanField("Filed Flight Plan - Updated", p.FlightPlan),
+	)
+	existing.applyFlightPlan(p.FlightPlan)
+	return embed, existing, true
+}
+
+func (pilotHandler) MessageID(s PilotSession) string { return s.MessageId }
+
+func (pilotHandler) SetMessageID(s PilotSession, id string) PilotSession {
+	s.MessageId = id
+	return s
+}
+
+// OnlineCheck performs one reconciliation pass for online pilots.
+func OnlineCheck(src DataSource, st store.SessionStore[PilotSession]) {
+	webhook, err := newDiscordWebhook()
 	if err != nil {
-		log.Printf("failed to create discord client: %v", err)
+		log.Printf("failed to create discord webhook: %v", err)
 		return
 	}
-
-	u, err := s.GetAllFCPUsersCID()
-	if err != nil {
-		log.Println("Error getting users: ", err)
-		return
-	}
-	o, err := s.GetVatsimDataFeed()
-	if err != nil {
-		log.Println("Error getting vatsim data", err)
-		return
-	}
-
-	var dfmap = make(map[string]tpcgo.Pilot)
-
-	for _, v := range o.Pilots {
-		dfmap[strconv.Itoa(v.CID)] = v
-	}
-
-	for _, uu := range u {
-
-		cid := strconv.Itoa(uu.VATSIMCid)
-
-		existing, found, err := st.Get(ctx, cid)
-		if err != nil {
-			log.Printf("store get failed for cid %d: %v", uu.VATSIMCid, err)
-			continue
-		}
-
-		pilot, online := dfmap[cid]
-		if !online {
-			// The pilot is no longer connected: close out a tracked flight.
-			if found {
-				embedd := &discordgo.MessageEmbed{
-					Title: "A flight has been logged!",
-					Fields: []*discordgo.MessageEmbedField{
-						{
-							Name:  "Callsign",
-							Value: existing.Callsign,
-						},
-						{
-							Name:  "Start Time",
-							Value: existing.Start,
-						},
-						{
-							Name:  "End Time",
-							Value: fmt.Sprintf("<t:%d:f>", time.Now().Unix()),
-						},
-					},
-					Color: 3651327,
-					Footer: &discordgo.MessageEmbedFooter{
-						Text:    "Made by the TPC Tech Team",
-						IconURL: "https://static1.squarespace.com/static/614689d3918044012d2ac1b4/t/616ff36761fabc72642806e3/1634726781251/TPC_FullColor_TransparentBg_1280x1024_72dpi.png",
-					}}
-				_, dgerr := d.WebhookMessageEdit(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), existing.MessageId, &discordgo.WebhookEdit{
-					Embeds: &[]*discordgo.MessageEmbed{embedd},
-				})
-				if dgerr != nil {
-					log.Printf("webhook edit (end) failed for cid %d: %v", uu.VATSIMCid, dgerr)
-					continue
-				}
-				if derr := st.Delete(ctx, cid); derr != nil {
-					log.Printf("store delete failed for cid %d: %v", uu.VATSIMCid, derr)
-				}
-			}
-			continue
-		}
-
-		if found {
-			// Flight already announced: post an update if the filed flight
-			// plan has been revised.
-			if pilot.FlightPlan != nil {
-				storedRev, _ := strconv.Atoi(existing.RevisionId)
-				if pilot.FlightPlan.RevisionID > storedRev {
-					embedd := &discordgo.MessageEmbed{
-						Title: "A flight has started! - Updated Flight Plan",
-						Fields: []*discordgo.MessageEmbedField{
-							{
-								Name:  "Callsign",
-								Value: existing.Callsign,
-							},
-							{
-								Name:  "Start Time",
-								Value: existing.Start,
-							},
-						},
-						Color: 3651327,
-						Footer: &discordgo.MessageEmbedFooter{
-							Text:    "Made by the TPC Tech Team",
-							IconURL: "https://static1.squarespace.com/static/614689d3918044012d2ac1b4/t/616ff36761fabc72642806e3/1634726781251/TPC_FullColor_TransparentBg_1280x1024_72dpi.png",
-						}}
-					embedd.Fields = append(embedd.Fields, &discordgo.MessageEmbedField{
-						Name:  "Filed Flight Plan - Updated",
-						Value: fmt.Sprintf("> A/C: %v\n> DEP: %v\n> ARR: %v\n> Route: %v\n> Remarks: %v", pilot.FlightPlan.AircraftShort, pilot.FlightPlan.Departure, pilot.FlightPlan.Arrival, pilot.FlightPlan.Route, pilot.FlightPlan.Remarks),
-					})
-					_, dgerr := d.WebhookMessageEdit(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), existing.MessageId, &discordgo.WebhookEdit{
-						Embeds: &[]*discordgo.MessageEmbed{embedd},
-					})
-					if dgerr != nil {
-						log.Printf("webhook edit failed for cid %d: %v", uu.VATSIMCid, dgerr)
-						continue
-					}
-					existing.AircraftShort = pilot.FlightPlan.AircraftShort
-					existing.Departure = pilot.FlightPlan.Departure
-					existing.Arrival = pilot.FlightPlan.Arrival
-					existing.Route = pilot.FlightPlan.Route
-					existing.Remarks = pilot.FlightPlan.Remarks
-					existing.RevisionId = strconv.Itoa(pilot.FlightPlan.RevisionID)
-					if serr := st.Set(ctx, cid, existing); serr != nil {
-						log.Printf("store set (update) failed for cid %d: %v", uu.VATSIMCid, serr)
-					}
-				}
-			}
-			continue
-		}
-
-		// New flight: announce it and start tracking.
-		if !strings.Contains(pilot.Callsign, "TPC") {
-			continue
-		}
-
-		embedstart := &discordgo.MessageEmbed{
-			Title: "A flight has started!",
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:  "Callsign",
-					Value: pilot.Callsign,
-				},
-				{
-					Name:  "Start Time",
-					Value: fmt.Sprintf("<t:%d:f>", time.Now().Unix()),
-				},
-			},
-			Color: 3651327,
-			Footer: &discordgo.MessageEmbedFooter{
-				Text:    "Made by the TPC Tech Team",
-				IconURL: "https://static1.squarespace.com/static/614689d3918044012d2ac1b4/t/616ff36761fabc72642806e3/1634726781251/TPC_FullColor_TransparentBg_1280x1024_72dpi.png",
-			}}
-		if pilot.FlightPlan != nil {
-			embedstart.Fields = append(embedstart.Fields, &discordgo.MessageEmbedField{
-				Name:  "Filed Flight Plan",
-				Value: fmt.Sprintf("> A/C: %v\n> DEP: %v\n> ARR: %v\n> Route: %v\n> Remarks: %v", pilot.FlightPlan.AircraftShort, pilot.FlightPlan.Departure, pilot.FlightPlan.Arrival, pilot.FlightPlan.Route, pilot.FlightPlan.Remarks),
-			})
-		}
-		w, dgerr := d.WebhookExecute(os.Getenv("WEBHOOK_ID"), os.Getenv("WEBHOOK_TOKEN"), true, &discordgo.WebhookParams{
-			Embeds:    []*discordgo.MessageEmbed{embedstart},
-			AvatarURL: "https://cdn.thepilotclub.org/fcp/tpc%20logo.png",
-			Username:  "TPC Flight Tracking",
-		})
-		if dgerr != nil {
-			log.Printf("webhook execute failed for cid %d: %v", uu.VATSIMCid, dgerr)
-			continue
-		}
-
-		session := PilotSession{
-			CID:       strconv.Itoa(pilot.CID),
-			Callsign:  pilot.Callsign,
-			Start:     fmt.Sprintf("<t:%d:f>", time.Now().Unix()),
-			MessageId: w.ID,
-		}
-		if pilot.FlightPlan != nil {
-			session.AircraftShort = pilot.FlightPlan.AircraftShort
-			session.Departure = pilot.FlightPlan.Departure
-			session.Arrival = pilot.FlightPlan.Arrival
-			session.Route = pilot.FlightPlan.Route
-			session.Remarks = pilot.FlightPlan.Remarks
-			session.RevisionId = strconv.Itoa(pilot.FlightPlan.RevisionID)
-		}
-		if serr := st.Set(ctx, cid, session); serr != nil {
-			log.Printf("store set failed for cid %d: %v", uu.VATSIMCid, serr)
-		}
-	}
+	NewTracker[tpcgo.Pilot, PilotSession](st, webhook, pilotHandler{}).Run(context.Background(), src)
 }
