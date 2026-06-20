@@ -41,6 +41,20 @@ ENABLE_ATC=false go run ./cmd/presence-checker   # pilot only
 ENABLE_PILOT=false go run ./cmd/presence-checker # ATC only
 ```
 
+### Running Locally with Docker Compose
+
+A `docker-compose.yml` is provided to spin up Redis for local development:
+
+```bash
+docker compose up -d
+```
+
+This starts Redis on `localhost:6379`. Set `REDIS_URL=redis://localhost:6379/0` in your `.env` file, then run the app normally:
+
+```bash
+go run ./cmd/presence-checker
+```
+
 ### Running with Docker
 
 The provided `Dockerfile` uses a multi-stage build to compile the binary.
