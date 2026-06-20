@@ -14,10 +14,13 @@ func main() {
 	s, err := tpcgo.NewSession(tpcgo.SessionConfig{
 		FCPEnv: "production", // Leaving Blank due to it not being needed
 	})
+	if err != nil {
+		log.Fatalf("failed to create tpcgo session: %v", err)
+	}
 
 	for {
 		log.Println("Starting Online Checker Process")
-		functions.OnlineCheck(s, err)
+		functions.OnlineCheck(s)
 		log.Println("Online Checker Process Complete. Awaiting Datafeed Update.")
 		time.Sleep(15 * time.Second)
 	}

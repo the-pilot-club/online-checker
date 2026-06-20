@@ -29,11 +29,12 @@ type RedisStore struct {
 	RevisionId    string `redis:"revision_id"`
 }
 
-func OnlineCheck(s *tpcgo.Session, err error) {
+func OnlineCheck(s *tpcgo.Session) {
 
 	dbnum, err := strconv.Atoi(os.Getenv("REDIS_DB"))
 	if err != nil {
-		panic(err)
+		log.Printf("invalid REDIS_DB: %v", err)
+		return
 	}
 
 	rdb := redis.NewClient(&redis.Options{
@@ -41,19 +42,23 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 		DB:       dbnum,
 		Protocol: 3,
 	})
+	defer rdb.Close()
 	ctx := context.Background()
 
 	d, err := discordgo.New("")
-	//var embed *discordgo.MessageEmbed
+	if err != nil {
+		log.Printf("failed to create discord client: %v", err)
+		return
+	}
 
 	u, err := s.GetAllFCPUsersCID()
 	if err != nil {
-		fmt.Println("Error getting users: ", err)
+		log.Println("Error getting users: ", err)
 		return
 	}
 	o, err := s.GetVatsimDataFeed()
 	if err != nil {
-		fmt.Println("Error getting vatsim data", err)
+		log.Println("Error getting vatsim data", err)
 		return
 	}
 
@@ -72,7 +77,8 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 				var vv = value.(tpcgo.Pilot)
 				_ = rdb.HGetAll(ctx, "online:"+strconv.Itoa(uu.VATSIMCid)).Scan(&usru)
 				if vv.FlightPlan != nil {
-					if strconv.Itoa(vv.FlightPlan.RevisionID) > usru.RevisionId {
+					storedRev, _ := strconv.Atoi(usru.RevisionId)
+					if vv.FlightPlan.RevisionID > storedRev {
 						embedd := &discordgo.MessageEmbed{
 							Title: "A flight has started! - Updated Flight Plan",
 							Fields: []*discordgo.MessageEmbedField{
@@ -98,7 +104,19 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 							Embeds: &[]*discordgo.MessageEmbed{embedd},
 						})
 						if dgerr != nil {
-							log.Fatal(dgerr)
+							log.Printf("webhook edit failed for cid %d: %v", uu.VATSIMCid, dgerr)
+							continue
+						}
+						update := []string{
+							"aircraft_short", vv.FlightPlan.AircraftShort,
+							"departure", vv.FlightPlan.Departure,
+							"arrival", vv.FlightPlan.Arrival,
+							"route", vv.FlightPlan.Route,
+							"remarks", vv.FlightPlan.Remarks,
+							"revision_id", strconv.Itoa(vv.FlightPlan.RevisionID),
+						}
+						if _, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), update).Result(); reerr != nil {
+							log.Printf("redis HSet (update) failed for cid %d: %v", uu.VATSIMCid, reerr)
 						}
 					}
 				}
@@ -135,7 +153,8 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 						Username:  "TPC Flight Tracking",
 					})
 					if dgerr != nil {
-						log.Fatal(dgerr)
+						log.Printf("webhook execute failed for cid %d: %v", uu.VATSIMCid, dgerr)
+						continue
 					}
 					store := []string{
 						"cid", strconv.Itoa(v.CID),
@@ -153,9 +172,8 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 							"revision_id", strconv.Itoa(v.FlightPlan.RevisionID),
 						}...)
 					}
-					_, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), store).Result()
-					if reerr != nil {
-						fmt.Println(err)
+					if _, reerr := rdb.HSet(ctx, "online:"+strconv.Itoa(uu.VATSIMCid), store).Result(); reerr != nil {
+						log.Printf("redis HSet failed for cid %d: %v", uu.VATSIMCid, reerr)
 					}
 				}
 			}
@@ -188,16 +206,12 @@ func OnlineCheck(s *tpcgo.Session, err error) {
 					Embeds: &[]*discordgo.MessageEmbed{embedd},
 				})
 				if dgerr != nil {
-					log.Fatal(dgerr)
+					log.Printf("webhook edit (end) failed for cid %d: %v", uu.VATSIMCid, dgerr)
+					continue
 				}
 				rdb.Del(ctx, "online:"+strconv.Itoa(uu.VATSIMCid))
 			}
 		}
 
 	}
-	err = rdb.Close()
-	if err != nil {
-		return
-	}
-
 }
