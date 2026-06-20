@@ -65,8 +65,8 @@ Create a `.env` file or set the following variables in your environment:
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `REDIS_URL` | The hostname/address of your Redis server (port 6379 is appended automatically). | `localhost` |
-| `REDIS_DB` | The Redis database number to use. | `0` |
+| `REDIS_URL` | Redis connection string. Use `rediss://` for TLS. | `redis://localhost:6379/0` |
+| `REDIS_DB` | Optional. Redis database number; overrides the one in `REDIS_URL` when set. | `0` |
 | `WEBHOOK_ID` | The ID of the Discord Webhook. | `123456789012345678` |
 | `WEBHOOK_TOKEN` | The Token of the Discord Webhook. | `your-webhook-token-here` |
 
